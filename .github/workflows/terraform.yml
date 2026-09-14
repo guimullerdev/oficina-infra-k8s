@@ -1,0 +1,132 @@
+name: Terraform
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: "1.9.8"
+
+jobs:
+  plan:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      # AWS_SESSION_TOKEN só é necessário se a conta for AWS Academy Learner
+      # Lab (credenciais temporárias); com IAM user comum o secret fica vazio.
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        run: terraform init -backend-config=backend.hcl
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        env:
+          TF_VAR_existing_cluster_role_arn: ${{ secrets.EKS_CLUSTER_ROLE_ARN }}
+          TF_VAR_existing_node_role_arn: ${{ secrets.EKS_NODE_ROLE_ARN }}
+        run: terraform plan -no-color -input=false -out=tfplan
+        continue-on-error: true
+
+      - name: Render plan output
+        if: always()
+        run: terraform show -no-color tfplan > plan.txt 2>&1 || echo "Falha ao gerar o plan — ver logs do job." > plan.txt
+
+      - name: Comment plan on PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('plan.txt', 'utf8').slice(0, 60000);
+            const body = `#### Terraform Plan — \`oficina-infra-k8s\`\n<details><summary>Ver plano</summary>\n\n\`\`\`\n${plan}\n\`\`\`\n\n</details>`;
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+
+      - name: Fail job if plan failed
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+  apply:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # O contexto `secrets` não é acessível em condição `if`; por isso a chave
+    # do New Relic é exposta como env do job, para o passo poder testá-la.
+    env:
+      NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        run: terraform init -backend-config=backend.hcl
+
+      - name: Terraform Apply
+        env:
+          TF_VAR_existing_cluster_role_arn: ${{ secrets.EKS_CLUSTER_ROLE_ARN }}
+          TF_VAR_existing_node_role_arn: ${{ secrets.EKS_NODE_ROLE_ARN }}
+        run: terraform apply -auto-approve -input=false
+
+      # Segunda fase: só depois do cluster existir dá pra falar com a API dele.
+      # Fazer isso aqui, e não via provider kubernetes/helm do Terraform, evita
+      # o problema de bootstrap de provider (o provider precisaria do endpoint
+      # de um recurso que ainda não existe no primeiro apply).
+      - name: Configurar kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name "$(terraform output -raw cluster_name)" \
+            --region "${{ env.AWS_REGION }}"
+
+      - name: Criar namespaces de ambiente
+        run: kubectl apply -f k8s/namespaces.yaml
+
+      - name: Instalar agente do New Relic
+        if: env.NEW_RELIC_LICENSE_KEY != ''
+        run: |
+          helm repo add newrelic https://helm-charts.newrelic.com
+          helm repo update
+          helm upgrade --install newrelic-bundle newrelic/nri-bundle \
+            --namespace newrelic --create-namespace \
+            --set global.licenseKey="$NEW_RELIC_LICENSE_KEY" \
+            --set global.cluster="$(terraform output -raw cluster_name)" \
+            --set kube-state-metrics.enabled=true \
+            --set newrelic-infrastructure.privileged=true \
+            --set logging.enabled=true \
+            --wait
