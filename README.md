@@ -18,12 +18,20 @@ aplicação não vivem aqui.
 | Add-ons (`metrics-server`, CNI, CoreDNS, kube-proxy) | Job de migration do Prisma |
 | Namespaces `homolog` e `prod` | O pipeline que aplica tudo isso |
 | Agente do New Relic (métricas do cluster) | |
+| **API Gateway** (em `api-gateway/`, state próprio) | |
 
 A fronteira segue a ADR 0001 e foi confirmada em Q&A oficial da FIAP: o repo
 de infraestrutura Kubernetes provisiona o ambiente; o ciclo de vida da
 aplicação — incluindo o deploy dela — pertence ao repo da aplicação. Este
 repo expõe outputs (endpoint, nome do cluster, CA, OIDC) e o pipeline da app
 os consome para autenticar e aplicar seus próprios manifestos.
+
+Este repositório tem **duas raízes Terraform**, com states independentes:
+
+| Diretório | O que provisiona | Quando aplicar |
+|---|---|---|
+| `.` (raiz) | Cluster EKS, node group, add-ons | Primeiro |
+| `api-gateway/` | API Gateway: `POST /auth/cpf` → Lambda, `/{proxy+}` → EKS | Depois da Lambda e do cluster (ver o README de lá) |
 
 ## Stack
 

@@ -40,6 +40,14 @@ jobs:
       - name: Terraform Validate
         run: terraform validate
 
+      # api-gateway/ é uma raiz separada, com state próprio — `validate` do
+      # módulo raiz não a alcança.
+      - name: Terraform Validate (api-gateway)
+        working-directory: api-gateway
+        run: |
+          terraform init -backend=false
+          terraform validate
+
       - name: Aviso — plan pulado
         if: env.HAS_AWS == 'false'
         run: |
