@@ -40,7 +40,7 @@ Este módulo lê o state de outros dois, então precisa vir depois deles:
 ## Rotas da aplicação são opcionais no primeiro apply
 
 O VPC Link aponta para o NLB do Service da aplicação, que só existe depois do
-primeiro deploy do repo da app. Por isso `nlb_listener_arn` é variável:
+primeiro deploy do repo da app. Por isso `nlb_arn` é variável:
 
 - **vazia** (padrão): sobe só a rota de autenticação — o `apply` funciona
 - **preenchida**: as rotas `/{proxy+}` para o cluster são criadas
@@ -59,10 +59,14 @@ terraform apply
 Depois do primeiro deploy da aplicação, pegue o NLB e reaplique:
 
 ```bash
-kubectl get svc oficina-api -n prod \
-  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
-# encontre o listener ARN correspondente e passe:
-terraform apply -var="nlb_listener_arn=arn:aws:elasticloadbalancing:..."
+HOST=$(kubectl get svc oficina-api -n prod \
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+# O VPC Link espera o ARN do load balancer, não o de um listener:
+NLB_ARN=$(aws elbv2 describe-load-balancers \
+  --query "LoadBalancers[?DNSName=='$HOST'].LoadBalancerArn" --output text)
+
+terraform apply -var="nlb_arn=$NLB_ARN"
 ```
 
 Para descobrir a URL pública de cada ambiente:

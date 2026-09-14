@@ -13,6 +13,6 @@ output "auth_endpoints" {
 }
 
 output "rotas_da_app_expostas" {
-  description = "false enquanto `nlb_listener_arn` não for informado — nesse caso só a autenticação está roteada"
+  description = "false enquanto `nlb_arn` não for informado — nesse caso só a autenticação está roteada"
   value       = local.expor_app
 }

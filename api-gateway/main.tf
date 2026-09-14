@@ -39,7 +39,16 @@ locals {
   subnet_ids = data.terraform_remote_state.cluster.outputs.subnet_ids
 
   # Só cria as rotas para o cluster quando o NLB do Service já existe.
-  expor_app = var.nlb_listener_arn != ""
+  expor_app = var.nlb_arn != ""
+}
+
+# O VPC Link aponta para o NLB pelo ARN, mas a integração precisa do DNS name
+# dele na URI. Em vez de pedir os dois como variável (e correr o risco de
+# virem de load balancers diferentes), o DNS é lido a partir do próprio ARN.
+data "aws_lb" "app" {
+  count = local.expor_app ? 1 : 0
+
+  arn = var.nlb_arn
 }
 
 # REST API (v1), e não HTTP API (v2), por causa das stage variables: é o que
@@ -114,7 +123,7 @@ resource "aws_api_gateway_vpc_link" "eks" {
 
   name        = "${var.api_name}-vpc-link"
   description = "Liga o API Gateway ao NLB do Service da aplicação, sem passar pela internet"
-  target_arns = [var.nlb_listener_arn]
+  target_arns = [var.nlb_arn]
 }
 
 resource "aws_api_gateway_resource" "proxy" {
@@ -152,7 +161,12 @@ resource "aws_api_gateway_integration" "proxy" {
   integration_http_method = "ANY"
   connection_type         = "VPC_LINK"
   connection_id           = aws_api_gateway_vpc_link.eks[0].id
-  uri                     = "http://placeholder/{proxy}"
+
+  # O host aqui é o DNS do NLB. O VPC Link decide *por onde* o tráfego passa;
+  # a URI é quem diz *para quem* — as duas coisas precisam apontar para o
+  # mesmo load balancer, por isso o DNS sai do data source e não de um
+  # literal.
+  uri = "http://${data.aws_lb.app[0].dns_name}/{proxy}"
 
   request_parameters = {
     "integration.request.path.proxy" = "method.request.path.proxy"
