@@ -1,0 +1,18 @@
+# Namespaces de ambiente. São infraestrutura do cluster (ADR 0002), por isso
+# vivem aqui — o que roda DENTRO deles (Deployment/Service/HPA/Secret da app)
+# é do repo da aplicação, aplicado pelo pipeline dela (ADR 0001).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: homolog
+  labels:
+    ambiente: homolog
+    app.kubernetes.io/part-of: oficina
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prod
+  labels:
+    ambiente: prod
+    app.kubernetes.io/part-of: oficina
