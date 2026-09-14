@@ -15,9 +15,15 @@ env:
   TF_VERSION: "1.9.8"
 
 jobs:
+  # `fmt`, `init -backend=false` e `validate` não falam com a AWS, então
+  # rodam sempre e são o gate real do PR. Só `plan` precisa de credencial —
+  # enquanto a conta AWS não existir, esse passo é pulado explicitamente em
+  # vez de derrubar o job inteiro.
   plan:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    env:
+      HAS_AWS: ${{ secrets.AWS_ACCESS_KEY_ID != '' && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -25,26 +31,37 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      # AWS_SESSION_TOKEN só é necessário se a conta for AWS Academy Learner
-      # Lab (credenciais temporárias); com IAM user comum o secret fica vazio.
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Terraform Init
-        run: terraform init -backend-config=backend.hcl
-
       - name: Terraform Format Check
         run: terraform fmt -check -recursive
+
+      - name: Terraform Init (sem backend)
+        run: terraform init -backend=false
 
       - name: Terraform Validate
         run: terraform validate
 
+      - name: Aviso — plan pulado
+        if: env.HAS_AWS == 'false'
+        run: |
+          echo "::warning::Secrets de AWS não configurados neste repositório."
+          echo "::warning::fmt/validate rodaram; 'terraform plan' foi pulado."
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: env.HAS_AWS == 'true'
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # Só usado em conta AWS Academy Learner Lab (credenciais temporárias).
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init (com backend remoto)
+        if: env.HAS_AWS == 'true'
+        run: terraform init -reconfigure -backend-config=backend.hcl
+
       - name: Terraform Plan
         id: plan
+        if: env.HAS_AWS == 'true'
         env:
           TF_VAR_existing_cluster_role_arn: ${{ secrets.EKS_CLUSTER_ROLE_ARN }}
           TF_VAR_existing_node_role_arn: ${{ secrets.EKS_NODE_ROLE_ARN }}
@@ -52,11 +69,11 @@ jobs:
         continue-on-error: true
 
       - name: Render plan output
-        if: always()
+        if: env.HAS_AWS == 'true'
         run: terraform show -no-color tfplan > plan.txt 2>&1 || echo "Falha ao gerar o plan — ver logs do job." > plan.txt
 
       - name: Comment plan on PR
-        if: always()
+        if: env.HAS_AWS == 'true'
         uses: actions/github-script@v7
         with:
           script: |
@@ -71,15 +88,16 @@ jobs:
             });
 
       - name: Fail job if plan failed
-        if: steps.plan.outcome == 'failure'
+        if: env.HAS_AWS == 'true' && steps.plan.outcome == 'failure'
         run: exit 1
 
   apply:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # O contexto `secrets` não é acessível em condição `if`; por isso a chave
-    # do New Relic é exposta como env do job, para o passo poder testá-la.
     env:
+      HAS_AWS: ${{ secrets.AWS_ACCESS_KEY_ID != '' && 'true' || 'false' }}
+      # O contexto `secrets` não é acessível em condição `if`; por isso a
+      # chave do New Relic vira env do job, para o passo poder testá-la.
       NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
     steps:
       - uses: actions/checkout@v4
@@ -88,7 +106,14 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
+      - name: Aviso — deploy pulado
+        if: env.HAS_AWS == 'false'
+        run: |
+          echo "::warning::Secrets de AWS não configurados; nada foi provisionado."
+          echo "::warning::Configure AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY para o apply rodar."
+
       - uses: aws-actions/configure-aws-credentials@v4
+        if: env.HAS_AWS == 'true'
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -96,29 +121,33 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Terraform Init
+        if: env.HAS_AWS == 'true'
         run: terraform init -backend-config=backend.hcl
 
       - name: Terraform Apply
+        if: env.HAS_AWS == 'true'
         env:
           TF_VAR_existing_cluster_role_arn: ${{ secrets.EKS_CLUSTER_ROLE_ARN }}
           TF_VAR_existing_node_role_arn: ${{ secrets.EKS_NODE_ROLE_ARN }}
         run: terraform apply -auto-approve -input=false
 
-      # Segunda fase: só depois do cluster existir dá pra falar com a API dele.
-      # Fazer isso aqui, e não via provider kubernetes/helm do Terraform, evita
-      # o problema de bootstrap de provider (o provider precisaria do endpoint
-      # de um recurso que ainda não existe no primeiro apply).
+      # Segunda fase: só depois do cluster existir dá pra falar com a API
+      # dele. Fazer isso aqui, e não via provider kubernetes/helm do
+      # Terraform, evita o problema de bootstrap de provider (o provider
+      # precisaria do endpoint de um cluster que ainda não existe).
       - name: Configurar kubeconfig
+        if: env.HAS_AWS == 'true'
         run: |
           aws eks update-kubeconfig \
             --name "$(terraform output -raw cluster_name)" \
             --region "${{ env.AWS_REGION }}"
 
       - name: Criar namespaces de ambiente
+        if: env.HAS_AWS == 'true'
         run: kubectl apply -f k8s/namespaces.yaml
 
       - name: Instalar agente do New Relic
-        if: env.NEW_RELIC_LICENSE_KEY != ''
+        if: env.HAS_AWS == 'true' && env.NEW_RELIC_LICENSE_KEY != ''
         run: |
           helm repo add newrelic https://helm-charts.newrelic.com
           helm repo update
