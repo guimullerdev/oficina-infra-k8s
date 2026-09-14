@@ -3,8 +3,15 @@ resource "aws_eks_cluster" "this" {
   version  = var.kubernetes_version
   role_arn = local.cluster_role_arn
 
+  # Explícito, e não o default do provider (`true`), por dois motivos: os
+  # add-ons são declarados abaixo como `aws_eks_addon` gerenciados, então
+  # não queremos as cópias self-managed que o bootstrap instalaria; e o
+  # campo força recriação do cluster, de modo que deixá-lo implícito faz
+  # qualquer `plan` futuro querer destruir e recriar o control plane.
+  bootstrap_self_managed_addons = false
+
   vpc_config {
-    subnet_ids = data.aws_subnets.default.ids
+    subnet_ids = local.subnet_ids_eks
     # Endpoint público: o pipeline do repo da app roda em runner hospedado do
     # GitHub (fora da VPC) e precisa alcançar a API do cluster pra aplicar os
     # manifestos. O acesso continua autenticado por IAM.
@@ -26,7 +33,7 @@ resource "aws_eks_node_group" "this" {
   cluster_name    = aws_eks_cluster.this.name
   node_group_name = "${var.cluster_name}-nodes"
   node_role_arn   = local.node_role_arn
-  subnet_ids      = data.aws_subnets.default.ids
+  subnet_ids      = local.subnet_ids_eks
 
   instance_types = var.node_instance_types
 
@@ -60,4 +67,34 @@ resource "aws_eks_addon" "this" {
   resolve_conflicts_on_update = "OVERWRITE"
 
   depends_on = [aws_eks_node_group.this]
+}
+
+# Quem cria o cluster recebe admin automaticamente
+# (`bootstrap_cluster_creator_admin_permissions`), mas qualquer outro
+# principal precisa de access entry explícita. Sem isto, o pipeline da
+# aplicação — que autentica como um usuário IAM diferente de quem rodou o
+# primeiro apply — recebe "the server has asked for the client to provide
+# credentials" e não consegue aplicar manifesto nenhum.
+data "aws_caller_identity" "current" {}
+
+locals {
+  deploy_principal = var.deploy_principal_arn != "" ? var.deploy_principal_arn : data.aws_caller_identity.current.arn
+}
+
+resource "aws_eks_access_entry" "deploy" {
+  cluster_name  = aws_eks_cluster.this.name
+  principal_arn = local.deploy_principal
+  type          = "STANDARD"
+}
+
+resource "aws_eks_access_policy_association" "deploy_admin" {
+  cluster_name  = aws_eks_cluster.this.name
+  principal_arn = local.deploy_principal
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+
+  access_scope {
+    type = "cluster"
+  }
+
+  depends_on = [aws_eks_access_entry.deploy]
 }

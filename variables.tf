@@ -47,3 +47,29 @@ variable "existing_node_role_arn" {
   type        = string
   default     = ""
 }
+
+variable "azs_sem_suporte_eks" {
+  description = <<-EOT
+    Availability zones onde o EKS não cria control plane, e que por isso são
+    removidas da lista de subnets do cluster.
+
+    A AWS informa as suportadas na própria mensagem de erro quando a criação
+    falha. Em us-east-1 hoje só a `us-east-1e` está de fora; se mudar de
+    região, ajuste aqui.
+  EOT
+  type        = list(string)
+  default     = ["us-east-1e"]
+}
+
+variable "deploy_principal_arn" {
+  description = <<-EOT
+    ARN do principal IAM que o pipeline da aplicação usa para falar com o
+    cluster. Ganha acesso de admin via EKS access entry.
+
+    Vazio (padrão): usa quem estiver rodando o `terraform apply`, que é o
+    caso quando a mesma credencial provisiona a infra e faz o deploy.
+    Informe explicitamente se forem principals diferentes.
+  EOT
+  type        = string
+  default     = ""
+}
