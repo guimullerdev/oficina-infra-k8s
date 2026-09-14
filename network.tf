@@ -44,3 +44,36 @@ locals {
     if !contains(var.azs_sem_suporte_eks, s.availability_zone)
   ]
 }
+
+# ---------------------------------------------------------------------------
+# Tags de descoberta de load balancer
+# ---------------------------------------------------------------------------
+# O cloud-controller-manager do EKS não recebe a lista de subnets: ele
+# descobre por tag na hora de criar o load balancer de um Service
+# `type: LoadBalancer`. Sem estas duas tags ele não acha subnet nenhuma e o
+# Service fica em `<pending>` para sempre, com o evento
+# "could not find any suitable subnets for creating the ELB".
+#
+# Isso importa aqui porque o VPC Link do API Gateway (raiz `api-gateway/`)
+# exige um **NLB** — é assim que as rotas `/os/*` chegam na aplicação.
+#
+# `aws_ec2_tag` em vez de `tags` no recurso: estas subnets são da VPC default,
+# criadas pela AWS e lidas como data source. Este repo só acrescenta tags, não
+# gerencia o ciclo de vida delas.
+resource "aws_ec2_tag" "subnet_cluster" {
+  for_each = toset(local.subnet_ids_eks)
+
+  resource_id = each.value
+  key         = "kubernetes.io/cluster/${var.cluster_name}"
+  value       = "shared"
+}
+
+# `shared`, não `owned`: a VPC default é compartilhada com o RDS e a Lambda.
+# `owned` sinalizaria que o cluster pode dispor da rede como quiser.
+resource "aws_ec2_tag" "subnet_internal_elb" {
+  for_each = toset(local.subnet_ids_eks)
+
+  resource_id = each.value
+  key         = "kubernetes.io/role/internal-elb"
+  value       = "1"
+}
