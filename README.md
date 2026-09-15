@@ -5,6 +5,36 @@
 Terraform que provisiona o **cluster Kubernetes gerenciado (AWS EKS)** onde a
 aplicação da oficina roda.
 
+## Infraestrutura ativa
+
+| Recurso | Identificador |
+|---|---|
+| Cluster EKS | `oficina-cluster` · Kubernetes 1.31 · `us-east-1` |
+| Nós | 2 × `t3.small`, escalando até 4 |
+| Namespaces | `prod` e `homolog`, um Deployment + HPA em cada |
+| Add-ons | `coredns`, `kube-proxy`, `vpc-cni`, `metrics-server` |
+| Agente de observabilidade | `nri-bundle` (New Relic) no namespace `newrelic` |
+| API Gateway | `7eu2kz40xj`, stages `prod` e `homolog` |
+
+Endpoints públicos (a porta de entrada de tudo):
+
+- Produção: https://7eu2kz40xj.execute-api.us-east-1.amazonaws.com/prod
+- Homologação: https://7eu2kz40xj.execute-api.us-east-1.amazonaws.com/homolog
+- Dashboard: https://onenr.io/0qwykVVv1jn
+
+```bash
+aws eks update-kubeconfig --name oficina-cluster --region us-east-1
+kubectl get pods -n prod
+```
+
+O acesso ao cluster é concedido por **EKS access entry** — quem cria o cluster
+não vira administrador dele automaticamente, e sem a entrada o `kubectl`
+responde `the server has asked for the client to provide credentials`.
+
+> Infraestrutura de curso, provisionada para a avaliação e destruída depois.
+> O EKS cobra por hora de control plane, então o cluster não fica de pé
+> indefinidamente — tudo aqui é reproduzível com um `terraform apply`.
+
 ## Escopo: o que está aqui e o que não está
 
 Este repositório cuida **só da infraestrutura do cluster**. Os manifestos da
@@ -26,12 +56,18 @@ aplicação — incluindo o deploy dela — pertence ao repo da aplicação. Est
 repo expõe outputs (endpoint, nome do cluster, CA, OIDC) e o pipeline da app
 os consome para autenticar e aplicar seus próprios manifestos.
 
-Este repositório tem **duas raízes Terraform**, com states independentes:
+Este repositório tem **três raízes Terraform**, com states independentes:
 
 | Diretório | O que provisiona | Quando aplicar |
 |---|---|---|
 | `.` (raiz) | Cluster EKS, node group, add-ons | Primeiro |
 | `api-gateway/` | API Gateway: `POST /auth/cpf` → Lambda, `/{proxy+}` → EKS | Depois da Lambda e do cluster (ver o README de lá) |
+| `observabilidade/` | Alertas e monitor externo de uptime no New Relic | Depois do Gateway, a qualquer momento (ver o README de lá) |
+
+States separados porque os ciclos de vida são diferentes: alerta muda quando
+muda o que a aplicação emite, e o Gateway depende de recursos de outro
+repositório. Um state só faria qualquer ajuste de limiar disputar lock com um
+apply de cluster.
 
 ## Stack
 
@@ -39,6 +75,7 @@ Este repositório tem **duas raízes Terraform**, com states independentes:
 - AWS EKS 1.31, node group gerenciado em `t3.small`
 - GitHub Actions para CI/CD
 - New Relic (`nri-bundle` via Helm) para métricas de CPU/memória do cluster
+- Provider `newrelic/newrelic` ~> 3.43 para alertas e monitoramento externo
 
 ## Decisões de infraestrutura
 
@@ -111,6 +148,10 @@ Secrets necessários: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 | `vpc_id`, `subnet_ids` | API Gateway (Fase 6), para o VPC Link |
 | `node_security_group_id` | Ajuste fino de acesso ao RDS, se um dia o SG for restringido |
 
+A raiz `observabilidade/` expõe `policy_id`, `monitor_guid` e a lista de
+condições criadas — úteis para anexar novas condições sem procurar na
+interface, e para linkar o monitor no PDF de entrega.
+
 ## Custo
 
 O control plane do EKS custa ~US$0,10/h (~US$73/mês) e **não é coberto pelo
@@ -124,4 +165,6 @@ Vive no repo da aplicação (`TECH-CHALLENGE-FASE-ONE/docs/`):
 - ADR 0001 — padrão de comunicação entre os repos (a fronteira acima)
 - ADR 0002 — escalabilidade e separação de ambientes
 - ADR 0003 — uso do HPA e o metrics-server
+- ADR 0004 — organização dos logs e traces (o que os alertas consomem)
+- ADR 0006 — o API Gateway: onde mora, por que não valida JWT, por que v1
 - Diagrama de componentes: `docs/diagrams/0001-diagrama-componentes.md`
