@@ -66,9 +66,9 @@ variable "deploy_principal_arn" {
     ARN do principal IAM que o pipeline da aplicação usa para falar com o
     cluster. Ganha acesso de admin via EKS access entry.
 
-    Vazio (padrão): usa quem estiver rodando o `terraform apply`, que é o
-    caso quando a mesma credencial provisiona a infra e faz o deploy.
-    Informe explicitamente se forem principals diferentes.
+    Vazio (padrão), ou igual a quem roda o `terraform apply`: nenhuma entry
+    extra, porque o EKS já dá admin a quem cria o cluster. Informe só quando
+    o pipeline da aplicação usar um principal diferente do que provisiona.
   EOT
   type        = string
   default     = ""
