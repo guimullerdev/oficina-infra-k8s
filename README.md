@@ -56,13 +56,14 @@ aplicação — incluindo o deploy dela — pertence ao repo da aplicação. Est
 repo expõe outputs (endpoint, nome do cluster, CA, OIDC) e o pipeline da app
 os consome para autenticar e aplicar seus próprios manifestos.
 
-Este repositório tem **três raízes Terraform**, com states independentes:
+Este repositório tem **quatro raízes Terraform**, com states independentes:
 
 | Diretório | O que provisiona | Quando aplicar |
 |---|---|---|
 | `.` (raiz) | Cluster EKS, node group, add-ons | Primeiro |
 | `api-gateway/` | API Gateway: `POST /auth/cpf` → Lambda, `/{proxy+}` → EKS | Depois da Lambda e do cluster (ver o README de lá) |
 | `observabilidade/` | Alertas e monitor externo de uptime no New Relic | Depois do Gateway, a qualquer momento (ver o README de lá) |
+| `mensageria/` | Tópicos SNS compartilhados dos microsserviços (`oficina-os-events`, `oficina-billing-events`, `oficina-execucao-events`) | À mão, antes dos serviços que os usam (ver o README de lá) |
 
 States separados porque os ciclos de vida são diferentes: alerta muda quando
 muda o que a aplicação emite, e o Gateway depende de recursos de outro
@@ -134,6 +135,9 @@ kubectl apply -f k8s/namespaces.yaml
   comentado automaticamente no PR. É o gate do merge.
 - **Push em `main`** (pós-merge): `terraform apply`, depois
   `kubectl apply` dos namespaces e `helm upgrade` do agente New Relic.
+
+`mensageria/` é aplicado à mão. O push na `main` ignora `mensageria/**`,
+`api-gateway/**`, `observabilidade/**` e `**.md`.
 
 Secrets necessários: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `NEW_RELIC_LICENSE_KEY` e — só em conta Learner Lab — `AWS_SESSION_TOKEN`,
