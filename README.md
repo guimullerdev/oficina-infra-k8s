@@ -11,15 +11,15 @@ aplicação da oficina roda.
 |---|---|
 | Cluster EKS | `oficina-cluster` · Kubernetes 1.31 · `us-east-1` |
 | Nós | 2 × `t3.small`, escalando até 4 |
-| Namespaces | `prod` e `homolog`, um Deployment + HPA em cada |
+| Namespaces | `prod` (ambiente único) |
 | Add-ons | `coredns`, `kube-proxy`, `vpc-cni`, `metrics-server` |
+| Ingress | `ingress-nginx` (chart 4.15.1) no namespace `ingress-nginx`, IngressClass `nginx`, Service LoadBalancer como NLB interno |
 | Agente de observabilidade | `nri-bundle` (New Relic) no namespace `newrelic` |
-| API Gateway | `7eu2kz40xj`, stages `prod` e `homolog` |
+| API Gateway | `7eu2kz40xj`, stage `prod` |
 
 Endpoints públicos (a porta de entrada de tudo):
 
 - Produção: https://7eu2kz40xj.execute-api.us-east-1.amazonaws.com/prod
-- Homologação: https://7eu2kz40xj.execute-api.us-east-1.amazonaws.com/homolog
 - Dashboard: https://onenr.io/0qwykVVv1jn
 
 ```bash
@@ -27,9 +27,11 @@ aws eks update-kubeconfig --name oficina-cluster --region us-east-1
 kubectl get pods -n prod
 ```
 
-O acesso ao cluster é concedido por **EKS access entry** — quem cria o cluster
-não vira administrador dele automaticamente, e sem a entrada o `kubectl`
-responde `the server has asked for the client to provide credentials`.
+O acesso ao cluster é concedido por **EKS access entry**. Quem cria o cluster já
+vira administrador dele (`bootstrap_cluster_creator_admin_permissions = true`);
+a access entry extra só existe para um principal **diferente** do que roda o
+`apply`, e sem ela esse principal recebe `the server has asked for the client
+to provide credentials`.
 
 > Infraestrutura de curso, provisionada para a avaliação e destruída depois.
 > O EKS cobra por hora de control plane, então o cluster não fica de pé
@@ -40,13 +42,13 @@ responde `the server has asked for the client to provide credentials`.
 Este repositório cuida **só da infraestrutura do cluster**. Os manifestos da
 aplicação não vivem aqui.
 
-| Aqui (infraestrutura) | No repo da app (`TECH-CHALLENGE-FASE-ONE`) |
+| Aqui (infraestrutura) | No repo da app (`oficina-os-service`) |
 |---|---|
 | Cluster EKS e versão do Kubernetes | `Deployment`, `Service` |
 | Node group e seu autoscaling | `HPA` |
 | Rede (VPC, subnets) | `ConfigMap`, `Secret` |
 | Add-ons (`metrics-server`, CNI, CoreDNS, kube-proxy) | Job de migration do Prisma |
-| Namespaces `homolog` e `prod` | O pipeline que aplica tudo isso |
+| Namespace `prod` | O pipeline que aplica tudo isso |
 | Agente do New Relic (métricas do cluster) | |
 | **API Gateway** (em `api-gateway/`, state próprio) | |
 
@@ -134,7 +136,8 @@ kubectl apply -f k8s/namespaces.yaml
 - **Pull request para `main`**: `fmt -check`, `validate` e `plan` — o plano é
   comentado automaticamente no PR. É o gate do merge.
 - **Push em `main`** (pós-merge): `terraform apply`, depois
-  `kubectl apply` dos namespaces e `helm upgrade` do agente New Relic.
+  `kubectl apply` dos namespaces, `helm upgrade --install` do ingress-nginx
+  (IngressClass `nginx`) e `helm upgrade` do agente New Relic.
 
 `mensageria/` é aplicado à mão. O push na `main` ignora `mensageria/**`,
 `api-gateway/**`, `observabilidade/**` e `**.md`.
@@ -149,7 +152,8 @@ Secrets necessários: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 |---|---|
 | `cluster_name`, `cluster_endpoint`, `cluster_certificate_authority` | Pipeline da app, para `aws eks update-kubeconfig` e aplicar manifestos |
 | `cluster_oidc_issuer_url` | Permissão AWS via ServiceAccount (IRSA), se necessário |
-| `vpc_id`, `subnet_ids` | API Gateway (Fase 6), para o VPC Link |
+| `vpc_id` | Rede do cluster. O VPC Link do API Gateway usa o ARN do NLB, não as subnets |
+| `subnet_ids` | Não é mais consumido pelo API Gateway (`api-gateway/` não lê o state do cluster) |
 | `node_security_group_id` | Ajuste fino de acesso ao RDS, se um dia o SG for restringido |
 
 A raiz `observabilidade/` expõe `policy_id`, `monitor_guid` e a lista de
@@ -164,11 +168,11 @@ rodar `terraform destroy` fora das janelas de trabalho e da gravação do vídeo
 
 ## Documentação relacionada
 
-Vive no repo da aplicação (`TECH-CHALLENGE-FASE-ONE/docs/`):
+Vive no repo da aplicação (`oficina-os-service/docs/adr/`):
 
 - ADR 0001 — padrão de comunicação entre os repos (a fronteira acima)
 - ADR 0002 — escalabilidade e separação de ambientes
 - ADR 0003 — uso do HPA e o metrics-server
 - ADR 0004 — organização dos logs e traces (o que os alertas consomem)
 - ADR 0006 — o API Gateway: onde mora, por que não valida JWT, por que v1
-- Diagrama de componentes: `docs/diagrams/0001-diagrama-componentes.md`
+- Diagrama de componentes: `oficina-os-service/docs/diagrams/0001-diagrama-componentes.md`
