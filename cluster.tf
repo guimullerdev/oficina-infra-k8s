@@ -47,17 +47,40 @@ resource "aws_eks_node_group" "this" {
     max_unavailable = 1
   }
 
-  depends_on = [aws_iam_role_policy_attachment.node]
+  # Os add-ons de rede vêm ANTES dos nós. Com
+  # `bootstrap_self_managed_addons = false` o cluster nasce sem CNI nem
+  # kube-proxy; um nó que sobe assim nunca fica Ready e o node group termina
+  # em CREATE_FAILED (NodeCreationFailure).
+  depends_on = [
+    aws_iam_role_policy_attachment.node,
+    aws_eks_addon.rede,
+  ]
 }
 
-# Add-ons gerenciados. metrics-server NÃO vem por padrão no EKS (ao contrário
-# do GKE) — sem ele o HPA sobe mas fica com métrica <unknown> e nunca escala,
-# que é justamente o requisito de escalabilidade da fase (ver ADR 0003).
-resource "aws_eks_addon" "this" {
+# Add-ons gerenciados, em dois grupos por causa da ordem de criação.
+#
+# `rede` (vpc-cni, kube-proxy) são DaemonSets: instalam sem nó nenhum e
+# precisam existir para o nó ficar Ready.
+resource "aws_eks_addon" "rede" {
   for_each = toset([
     "vpc-cni",
-    "coredns",
     "kube-proxy",
+  ])
+
+  cluster_name                = aws_eks_cluster.this.name
+  addon_name                  = each.value
+  resolve_conflicts_on_create = "OVERWRITE"
+  resolve_conflicts_on_update = "OVERWRITE"
+}
+
+# `workloads` (coredns, metrics-server) são Deployments: sem nó para agendar
+# os pods o add-on fica DEGRADED e o apply estoura o timeout, então entram
+# depois do node group. metrics-server NÃO vem por padrão no EKS (ao contrário
+# do GKE) — sem ele o HPA sobe mas fica com métrica <unknown> e nunca escala,
+# que é justamente o requisito de escalabilidade da fase (ver ADR 0003).
+resource "aws_eks_addon" "workloads" {
+  for_each = toset([
+    "coredns",
     "metrics-server",
   ])
 
@@ -70,26 +93,34 @@ resource "aws_eks_addon" "this" {
 }
 
 # Quem cria o cluster recebe admin automaticamente
-# (`bootstrap_cluster_creator_admin_permissions`), mas qualquer outro
-# principal precisa de access entry explícita. Sem isto, o pipeline da
-# aplicação — que autentica como um usuário IAM diferente de quem rodou o
-# primeiro apply — recebe "the server has asked for the client to provide
-# credentials" e não consegue aplicar manifesto nenhum.
+# (`bootstrap_cluster_creator_admin_permissions`): o EKS cria a access entry
+# desse principal sozinho, e declarar outra para o mesmo ARN falha com 409
+# (ResourceInUseException). Por isso a entry explícita só existe quando o
+# principal do pipeline da aplicação é DIFERENTE de quem roda o apply. Sem
+# ela, esse outro principal recebe "the server has asked for the client to
+# provide credentials" e não consegue aplicar manifesto nenhum.
 data "aws_caller_identity" "current" {}
 
 locals {
-  deploy_principal = var.deploy_principal_arn != "" ? var.deploy_principal_arn : data.aws_caller_identity.current.arn
+  deploy_principal_extra = (
+    var.deploy_principal_arn != "" &&
+    var.deploy_principal_arn != data.aws_caller_identity.current.arn
+  )
 }
 
 resource "aws_eks_access_entry" "deploy" {
+  count = local.deploy_principal_extra ? 1 : 0
+
   cluster_name  = aws_eks_cluster.this.name
-  principal_arn = local.deploy_principal
+  principal_arn = var.deploy_principal_arn
   type          = "STANDARD"
 }
 
 resource "aws_eks_access_policy_association" "deploy_admin" {
+  count = local.deploy_principal_extra ? 1 : 0
+
   cluster_name  = aws_eks_cluster.this.name
-  principal_arn = local.deploy_principal
+  principal_arn = var.deploy_principal_arn
   policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
 
   access_scope {
