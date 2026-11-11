@@ -5,6 +5,15 @@ on:
     branches: [main]
   push:
     branches: [main]
+    # mensageria/, api-gateway/ e observabilidade/ são raízes separadas,
+    # aplicadas à mão. Sem isso, qualquer merge na main rodaria o apply da
+    # raiz e recriaria o cluster EKS (pago). Docs também não precisam de apply.
+    # O pull_request não filtra por path: um PR só de docs ainda roda o check.
+    paths-ignore:
+      - "mensageria/**"
+      - "api-gateway/**"
+      - "observabilidade/**"
+      - "**.md"
 
 permissions:
   contents: read
@@ -12,7 +21,7 @@ permissions:
 
 env:
   AWS_REGION: us-east-1
-  TF_VERSION: "1.9.8"
+  TF_VERSION: "1.15.8"
 
 jobs:
   # `fmt`, `init -backend=false` e `validate` não falam com a AWS, então
@@ -44,6 +53,15 @@ jobs:
       # módulo raiz não a alcança.
       - name: Terraform Validate (api-gateway)
         working-directory: api-gateway
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      # mensageria/ também é uma raiz separada. O `if` evita quebrar enquanto
+      # a pasta ainda não existe nesta branch.
+      - name: Terraform Validate (mensageria)
+        if: hashFiles('mensageria/**/*.tf') != ''
+        working-directory: mensageria
         run: |
           terraform init -backend=false
           terraform validate
