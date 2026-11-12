@@ -11,7 +11,7 @@ variable "cluster_name" {
 
 variable "kubernetes_version" {
   type    = string
-  default = "1.31"
+  default = "1.34"
 }
 
 variable "node_instance_types" {
