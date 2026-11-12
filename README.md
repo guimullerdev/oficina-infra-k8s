@@ -9,7 +9,7 @@ aplicação da oficina roda.
 
 | Recurso | Identificador |
 |---|---|
-| Cluster EKS | `oficina-cluster` · Kubernetes 1.31 · `us-east-1` |
+| Cluster EKS | `oficina-cluster` · Kubernetes 1.34 · `us-east-1` |
 | Nós | 2 × `t3.small`, escalando até 4 |
 | Namespaces | `prod` (ambiente único) |
 | Add-ons | `coredns`, `kube-proxy`, `vpc-cni`, `metrics-server` |
@@ -75,7 +75,7 @@ apply de cluster.
 ## Stack
 
 - Terraform >= 1.9, provider `hashicorp/aws` ~> 5.0
-- AWS EKS 1.31, node group gerenciado em `t3.small`
+- AWS EKS 1.34, node group gerenciado em `t3.small`
 - GitHub Actions para CI/CD
 - New Relic (`nri-bundle` via Helm) para métricas de CPU/memória do cluster
 - Provider `newrelic/newrelic` ~> 3.43 para alertas e monitoramento externo
