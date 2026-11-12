@@ -112,6 +112,7 @@ Fechar o túnel (Ctrl-C) e `kubectl -n prod delete pod pg-proxy`.
 cd oficina-infra-db
 url() { terraform -chdir=bootstrap-db output -json database_urls | jq -r ".$1"; }
 url os | gh secret set DATABASE_URL --env prod --repo guimullerdev/oficina-os-service
+url billing | gh secret set DATABASE_URL --env prod --repo guimullerdev/oficina-billing-service
 url os | gh secret set DATABASE_URL_PROD --repo guimullerdev/oficina-auth-lambda
 url os | gh secret set DATABASE_URL_HOMOLOG --repo guimullerdev/oficina-auth-lambda   # a validation exige não vazio; o alias homolog segue existindo
 ```
@@ -141,6 +142,32 @@ aws sqs get-queue-attributes --queue-url $(terraform output -raw queue_url) --at
 
 `SQS_CONSUMER_ENABLED` continua `"false"` no configmap até validar a fila.
 
+### 6b. Fila do billing (oficina-billing-service/terraform)
+
+```bash
+cd oficina-billing-service/terraform
+M=../../oficina-infra-k8s/mensageria
+terraform init -backend-config=backend.hcl
+terraform plan \
+  -var os_events_topic_arn=$(terraform -chdir=$M output -raw os_events_topic_arn) \
+  -var billing_events_topic_arn=$(terraform -chdir=$M output -raw billing_events_topic_arn)
+```
+
+Esperado: 2 filas, 1 subscription (só `oficina-os-events`), queue policy, IAM
+policy e usuário `oficina-billing-service-pod`, 0 destroy. `apply` com os mesmos
+`-var`, depois copiar as saídas para o environment `prod` do billing. A access key
+não fica no state (igual ao OS): é criada à mão e vai direto para os secrets.
+
+```bash
+terraform output -raw queue_url | gh secret set SQS_QUEUE_URL --env prod --repo guimullerdev/oficina-billing-service
+terraform -chdir=$M output -raw billing_events_topic_arn | gh secret set SNS_TOPIC_ARN --env prod --repo guimullerdev/oficina-billing-service
+read -r KID KSECRET < <(aws iam create-access-key --user-name $(terraform output -raw service_user_name) --query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text)
+gh secret set POD_AWS_ACCESS_KEY_ID --env prod --repo guimullerdev/oficina-billing-service --body "$KID"
+gh secret set POD_AWS_SECRET_ACCESS_KEY --env prod --repo guimullerdev/oficina-billing-service --body "$KSECRET"
+unset KID KSECRET
+aws sqs get-queue-attributes --queue-url $(terraform output -raw queue_url) --attribute-names RedrivePolicy   # maxReceiveCount 3
+```
+
 ## 7. Deploy do OS
 
 O pacote GHCR `oficina-os-service` só existe depois do primeiro push e nasce
@@ -158,6 +185,27 @@ Confirmar: Job de migration `Complete` e
 `kubectl -n prod rollout status deployment/oficina-os-service --timeout=300s`.
 A migration `fronteira_dados` dropa tabelas e é irreversível: só roda no
 `oficina_os` recém-criado e vazio.
+
+### 7b. Deploy do billing
+
+Mesmo caso do OS: o pacote GHCR `oficina-billing-service` nasce **privado** e o
+primeiro deploy morre em `ImagePullBackOff`.
+
+1. `gh workflow run ci-cd.yml --repo guimullerdev/oficina-billing-service --ref main`
+   (o job de build publica a imagem; o deploy vai falhar no pull).
+2. No GitHub: Packages → `oficina-billing-service` → Package settings → Change
+   visibility → Public.
+3. Apagar o Job de migration falhado:
+   `kubectl -n prod delete job -l app=oficina-billing-service,component=migration`.
+4. Reexecutar: `gh run rerun <id> --failed --repo guimullerdev/oficina-billing-service`.
+
+Confirmar (`<sha>` é o SHA do deploy):
+
+```bash
+kubectl -n prod get pods -l app=oficina-billing-service                  # 2 Ready
+kubectl -n prod wait --for=condition=complete job/oficina-billing-migrate-<sha> --timeout=300s
+kubectl -n prod rollout status deployment/oficina-billing-service --timeout=300s
+```
 
 ## 8. API Gateway
 
@@ -200,6 +248,7 @@ CPF semeado (`oficina-os-service/scripts/preparar-demo.sh`).
 ```bash
 API=https://7eu2kz40xj.execute-api.us-east-1.amazonaws.com/prod
 curl -i $API/health                       # 200 com o serviço no ar (404 do nginx sem ele)
+curl -i $API/billing/health               # 200 com o billing no ar
 curl -i -X POST $API/auth/cpf -H 'content-type: application/json' -d '{"cpf":"<cpf semeado>"}'   # 200
 aws apigateway get-stages --rest-api-id 7eu2kz40xj --query 'item[].stageName'   # só prod
 ```
@@ -224,5 +273,6 @@ aws eks list-clusters; aws rds describe-db-instances; aws ec2 describe-instances
   --filters Name=instance-state-name,Values=running
 ```
 
-Ficam vivos: tópicos SNS, filas SQS, API Gateway só com `/auth/cpf`, Lambda,
+Ficam vivos: tópicos SNS, filas SQS (OS e billing, sem custo parado) e usuários
+IAM dos pods, API Gateway só com `/auth/cpf`, Lambda,
 bucket de state. Conferir snapshots manuais do RDS (`aws rds describe-db-snapshots`).
