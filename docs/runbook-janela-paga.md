@@ -168,6 +168,40 @@ unset KID KSECRET
 aws sqs get-queue-attributes --queue-url $(terraform output -raw queue_url) --attribute-names RedrivePolicy   # maxReceiveCount 3
 ```
 
+### 6c. Fila e tabela do execução (oficina-execucao-service/terraform)
+
+```bash
+cd oficina-execucao-service/terraform
+grep '^ *key' backend.hcl     # tem que ser execucao-service/terraform.tfstate, antes do init
+M=../../oficina-infra-k8s/mensageria
+terraform init -backend-config=backend.hcl
+terraform plan \
+  -var os_events_topic_arn=$(terraform -chdir=$M output -raw os_events_topic_arn) \
+  -var execucao_events_topic_arn=$(terraform -chdir=$M output -raw execucao_events_topic_arn)
+```
+
+Esperado: fila `oficina-execucao-queue` com DLQ `oficina-execucao-queue-dlq`, subscription
+em `oficina-os-events`, queue policy, IAM policy e usuário do pod, 0 destroy. A tabela
+`oficina-execucao` não pode ser recriada se sobreviveu ao teardown (fica no state).
+`apply` com os mesmos `-var`, depois copiar as saídas para o environment `prod` do execução.
+
+```bash
+terraform output -raw queue_url | gh secret set SQS_QUEUE_URL --env prod --repo guimullerdev/oficina-execucao-service
+gh secret set DYNAMODB_TABLE --env prod --repo guimullerdev/oficina-execucao-service --body oficina-execucao
+terraform -chdir=$M output -raw execucao_events_topic_arn | gh secret set SNS_TOPIC_ARN --env prod --repo guimullerdev/oficina-execucao-service
+read -r KID KSECRET < <(aws iam create-access-key --user-name $(terraform output -raw service_user_name) --query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text)
+gh secret set POD_AWS_ACCESS_KEY_ID --env prod --repo guimullerdev/oficina-execucao-service --body "$KID"
+gh secret set POD_AWS_SECRET_ACCESS_KEY --env prod --repo guimullerdev/oficina-execucao-service --body "$KSECRET"
+unset KID KSECRET
+```
+
+`JWT_SECRET` tem que ser o mesmo do `oficina-os-service` (o GitHub não devolve o valor,
+então usar a mesma origem que foi usada no OS; não imprimir):
+
+```bash
+<origem-do-jwt-secret> | gh secret set JWT_SECRET --env prod --repo guimullerdev/oficina-execucao-service
+```
+
 ## 7. Deploy do OS
 
 O pacote GHCR `oficina-os-service` só existe depois do primeiro push e nasce
@@ -206,6 +240,21 @@ kubectl -n prod get pods -l app=oficina-billing-service                  # 2 Rea
 kubectl -n prod wait --for=condition=complete job/oficina-billing-migrate-<sha> --timeout=300s
 kubectl -n prod rollout status deployment/oficina-billing-service --timeout=300s
 ```
+
+### 7c. Deploy do execução
+
+Mesmo caso do OS e do billing: o pacote GHCR `oficina-execucao-service` nasce **privado**
+e o primeiro deploy morre em `ImagePullBackOff`. Não há migration (a tabela é DynamoDB).
+
+1. `gh workflow run ci-cd.yml --repo guimullerdev/oficina-execucao-service --ref main`
+   (o deploy vai falhar no pull).
+2. No GitHub: Packages → `oficina-execucao-service` → Package settings → Change
+   visibility → Public.
+3. Reexecutar: `gh run rerun <id> --failed --repo guimullerdev/oficina-execucao-service`.
+
+Confirmar: `kubectl -n prod rollout status deployment/oficina-execucao-service --timeout=300s`.
+
+Ingress do serviço: só `/execucao`. Nunca declarar `/health` nem `/api` (o `/health` é do OS).
 
 ## 8. API Gateway
 
@@ -249,6 +298,9 @@ CPF semeado (`oficina-os-service/scripts/preparar-demo.sh`).
 API=https://7eu2kz40xj.execute-api.us-east-1.amazonaws.com/prod
 curl -i $API/health                       # 200 com o serviço no ar (404 do nginx sem ele)
 curl -i $API/billing/health               # 200 com o billing no ar
+curl -i $API/execucao/health              # 200 com o execução no ar
+kubectl -n prod get pods -l app=oficina-execucao-service                             # 2 Ready
+aws sqs get-queue-attributes --queue-url $(aws sqs get-queue-url --queue-name oficina-execucao-queue-dlq --query QueueUrl --output text) --attribute-names ApproximateNumberOfMessages   # 0
 curl -i -X POST $API/auth/cpf -H 'content-type: application/json' -d '{"cpf":"<cpf semeado>"}'   # 200
 aws apigateway get-stages --rest-api-id 7eu2kz40xj --query 'item[].stageName'   # só prod
 ```
@@ -268,11 +320,14 @@ helm uninstall ingress-nginx -n ingress-nginx
 aws elbv2 describe-load-balancers --query 'LoadBalancers[].LoadBalancerArn'   # esperar vazio
 terraform -chdir=oficina-infra-k8s/api-gateway apply            # sem -var: volta a só /auth/cpf
 terraform -chdir=oficina-infra-k8s destroy                      # EKS
+# execução: a tabela oficina-execucao sobrevive ao EKS; o destroy é no repo do serviço
+(cd oficina-execucao-service/terraform && terraform destroy -var-file=terraform.tfvars)   # tabela, fila, DLQ e usuário IAM
 terraform -chdir=oficina-infra-db destroy                       # RDS (sem snapshot final)
 aws eks list-clusters; aws rds describe-db-instances; aws ec2 describe-instances \
   --filters Name=instance-state-name,Values=running
 ```
 
-Ficam vivos: tópicos SNS, filas SQS (OS e billing, sem custo parado) e usuários
+Ficam vivos: tópicos SNS, filas SQS (OS, billing e execução, sem custo parado),
+tabela DynamoDB `oficina-execucao` (sai só no destroy do repo do serviço) e usuários
 IAM dos pods, API Gateway só com `/auth/cpf`, Lambda,
 bucket de state. Conferir snapshots manuais do RDS (`aws rds describe-db-snapshots`).
