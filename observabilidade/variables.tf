@@ -60,3 +60,9 @@ variable "app_name" {
   type        = string
   default     = "oficina-api"
 }
+
+variable "aws_region" {
+  description = "Região AWS onde ficam as filas SQS consultadas pela integração do New Relic"
+  type        = string
+  default     = "us-east-1"
+}

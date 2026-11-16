@@ -17,3 +17,13 @@ output "condicoes" {
     newrelic_nrql_alert_condition.health_fora_do_ar.name,
   ]
 }
+
+output "newrelic_integrations_role_arn" {
+  description = "ARN da role IAM que o New Relic assume para consultar a AWS"
+  value       = aws_iam_role.newrelic_integrations.arn
+}
+
+output "aws_linked_account_id" {
+  description = "Id da conta AWS vinculada no New Relic (integração por API polling)"
+  value       = newrelic_cloud_aws_link_account.oficina.id
+}

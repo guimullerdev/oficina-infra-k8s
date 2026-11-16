@@ -6,7 +6,7 @@
 # ainda estivesse aberta. Por condição, cada tipo de problema abre seu próprio
 # incidente.
 resource "newrelic_alert_policy" "oficina" {
-  name                = "Oficina — Tech Challenge Fase 3"
+  name                = "Oficina — Tech Challenge Fase 4"
   incident_preference = "PER_CONDITION"
 }
 
