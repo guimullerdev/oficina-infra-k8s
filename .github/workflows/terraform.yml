@@ -168,6 +168,14 @@ jobs:
             --name "$(terraform output -raw cluster_name)" \
             --region "${{ env.AWS_REGION }}"
 
+      # Helm fixado: o do runner muda sem aviso e o comportamento de apply
+      # (server-side vs client-side) muda junto entre majors.
+      - name: Instalar Helm
+        if: env.HAS_AWS == 'true'
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v4.3.1
+
       - name: Criar namespaces de ambiente
         if: env.HAS_AWS == 'true'
         run: kubectl apply -f k8s/namespaces.yaml
@@ -191,7 +199,13 @@ jobs:
         run: |
           helm repo add newrelic https://helm-charts.newrelic.com
           helm repo update
+          # --server-side=false: o Job kube-webhook-certgen do chart grava o
+          # caBundle do MutatingWebhookConfiguration depois do install; com
+          # server-side apply todo upgrade conflita com esse campo e falha.
+          # Chart fixado na versão instalada para o upgrade ser reprodutível.
           helm upgrade --install newrelic-bundle newrelic/nri-bundle \
+            --version 8.0.40 \
+            --server-side=false \
             --namespace newrelic --create-namespace \
             --set global.licenseKey="$NEW_RELIC_LICENSE_KEY" \
             --set global.cluster="$(terraform output -raw cluster_name)" \
