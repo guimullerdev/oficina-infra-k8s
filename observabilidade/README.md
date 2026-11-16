@@ -21,7 +21,7 @@ descrevem eventos que a aplicação emite e mudam junto com o código dela.
 
 | Recurso | Para quê |
 |---|---|
-| Política `Oficina — Tech Challenge Fase 3` | agrupa as condições, com incidente por condição |
+| Política `Oficina — Tech Challenge Fase 4` | agrupa as condições, com incidente por condição |
 | Condição `Falha no processamento de OS` | qualquer `os.processamento.falha` em 5 min |
 | Condição `Falhas de requisição acima do normal` | mais de 5 `requisicao.falha` em 5 min |
 | Condição `Aplicação parou de reportar transações` | nenhuma `Transaction` por 10 min |
@@ -48,9 +48,28 @@ Link, NLB, pod — e é o único que percebe uma quebra nas camadas de rede entr
 eles. A `validation_string` existe pelo mesmo motivo: uma página de erro do
 Gateway com status 200 passaria numa checagem que só olha o código.
 
+## Integração AWS (SQS)
+
+`integracao-aws.tf` vincula a conta AWS ao New Relic por **API polling** e
+coleta só o SQS: filas com prefixo `oficina`, na região `var.aws_region`,
+a cada 5 minutos (`metrics_polling_interval = 300`). Os dados chegam como
+`QueueSample`, com tags e inventário estendido. A primeira leitura aparece
+em cerca de 15 minutos após o apply.
+
+`iam.tf` cria a role `NewRelicIntegrations`, que o New Relic assume. A
+trust policy aceita apenas a conta AWS do New Relic (`754728514883`) e exige
+`sts:ExternalId` igual ao id da conta New Relic, o que evita o problema do
+*confused deputy*. A permissão é somente leitura: listar filas, ler
+atributos e tags, e consultar métricas no CloudWatch.
+
+A role e a integração **sobrevivem ao teardown do EKS**: pertencem a esta
+raiz, não à do cluster, e não geram custo (IAM é gratuito; o polling usa
+só a API do CloudWatch).
+
 ## Pré-requisitos
 
 - Terraform >= 1.9
+- Credenciais AWS no ambiente, com permissão para criar role IAM
 - Uma **User key** do New Relic (`NRAK-...`)
 
 A User key **não** é a license key. A license key (`NEW_RELIC_LICENSE_KEY`,
@@ -67,7 +86,11 @@ falha no plan, em vez de aplicar e falhar com erro de autenticação obscuro.
 ```bash
 terraform init -backend-config=backend.hcl
 
-export TF_VAR_new_relic_api_key='NRAK-...'
+# Credenciais AWS (necessárias para a role da integração), por exemplo:
+export AWS_PROFILE=meu-perfil
+
+# Lê a chave sem ecoar no terminal nem gravar no histórico do shell
+read -s TF_VAR_new_relic_api_key && export TF_VAR_new_relic_api_key
 export TF_VAR_email_notificacao='quem-recebe@exemplo.com'
 
 terraform plan
