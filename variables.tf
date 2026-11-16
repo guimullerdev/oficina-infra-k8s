@@ -21,8 +21,9 @@ variable "node_instance_types" {
 }
 
 variable "node_desired_size" {
-  type    = number
-  default = 2
+  description = "3 nós: um t3.small comporta só 11 pods (limite de ENI/IP). Com kube-system, New Relic, ingress e os 3 serviços, 2 nós (22 vagas) lotaram e Jobs de migration e rollouts ficavam Pending"
+  type        = number
+  default     = 3
 }
 
 variable "node_min_size" {
