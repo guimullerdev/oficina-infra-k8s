@@ -160,6 +160,15 @@ A raiz `observabilidade/` expõe `policy_id`, `monitor_guid` e a lista de
 condições criadas — úteis para anexar novas condições sem procurar na
 interface, e para linkar o monitor no PDF de entrega.
 
+## Como reconstruir o ambiente
+
+O passo a passo completo está em
+[`docs/runbook-janela-paga.md`](docs/runbook-janela-paga.md): sobe o ambiente
+único `prod` do zero, na ordem **RDS → EKS + ingress → túnel → bootstrap dos
+bancos → secrets → fila do OS → deploy → API Gateway → verificação**, e termina
+com o **teardown** (EKS e RDS desligados; SNS e API Gateway ficam, sem custo
+parado). Inclui a prova de isolamento de banco pelo túnel (pod `socat`).
+
 ## Custo
 
 O control plane do EKS custa ~US$0,10/h (~US$73/mês) e **não é coberto pelo
