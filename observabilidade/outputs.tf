@@ -15,6 +15,7 @@ output "condicoes" {
     newrelic_nrql_alert_condition.falha_requisicao.name,
     newrelic_nrql_alert_condition.app_sem_trafego.name,
     newrelic_nrql_alert_condition.health_fora_do_ar.name,
+    newrelic_nrql_alert_condition.mensagem_em_dlq.name,
   ]
 }
 
