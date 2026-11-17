@@ -111,3 +111,35 @@ resource "newrelic_nrql_alert_condition" "app_sem_trafego" {
     threshold_occurrences = "all"
   }
 }
+
+# ---------------------------------------------------------------------------
+# Mensagem parada em DLQ
+# ---------------------------------------------------------------------------
+# Qualquer mensagem visível numa DLQ é um evento da saga que esgotou as
+# tentativas (3 recebimentos) e não vai ser processado sozinho. Os dados vêm
+# da integração AWS (integracao-aws.tf), que nesta conta grava métricas
+# dimensionais em `Metric`, não o evento `QueueSample` antigo. O polling é de
+# 5 min, por isso a janela de 10 min com `cadence`: espera a amostra chegar
+# antes de avaliar. FACET por fila, para o incidente dizer qual DLQ encheu.
+resource "newrelic_nrql_alert_condition" "mensagem_em_dlq" {
+  policy_id = newrelic_alert_policy.oficina.id
+  name      = "Mensagem parada em DLQ"
+  type      = "static"
+  enabled   = true
+
+  aggregation_window           = 600
+  aggregation_method           = "cadence"
+  aggregation_delay            = 600
+  violation_time_limit_seconds = 86400
+
+  nrql {
+    query = "SELECT max(aws.sqs.ApproximateNumberOfMessagesVisible) FROM Metric WHERE aws.sqs.QueueName LIKE '%dlq' FACET aws.sqs.QueueName"
+  }
+
+  critical {
+    operator              = "above"
+    threshold             = 0
+    threshold_duration    = 600
+    threshold_occurrences = "at_least_once"
+  }
+}

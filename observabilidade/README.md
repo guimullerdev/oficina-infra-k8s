@@ -27,6 +27,7 @@ descrevem eventos que a aplicação emite e mudam junto com o código dela.
 | Condição `Aplicação parou de reportar transações` | nenhuma `Transaction` por 10 min |
 | Monitor `Oficina — health (prod)` | consulta o `/health` no Gateway a cada 5 min, de duas regiões |
 | Condição `Health check externo falhando` | duas falhas do monitor em 5 min |
+| Condição `Mensagem parada em DLQ` | qualquer mensagem visível numa DLQ (`Metric` `aws.sqs.ApproximateNumberOfMessagesVisible`, `QueueName LIKE '%dlq'`) por fila, janela de 10 min |
 | Destination + channel + workflow | leva o incidente para um e-mail |
 
 Sem o workflow, uma condição que dispara só aparece na interface e não
