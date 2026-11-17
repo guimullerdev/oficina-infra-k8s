@@ -8,9 +8,11 @@ resource "newrelic_notification_destination" "email" {
   name       = "Oficina — e-mail do time"
   type       = "EMAIL"
 
+  # O New Relic grava o endereço em minúsculas. Sem o lower(), todo plan via
+  # diferença de caixa e reescrevia o destino.
   property {
     key   = "email"
-    value = var.email_notificacao
+    value = lower(var.email_notificacao)
   }
 }
 
