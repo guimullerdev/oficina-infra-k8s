@@ -15,7 +15,9 @@ resource "newrelic_synthetics_monitor" "health_prod" {
 
   # Duas regiões, não uma: com um local só, uma instabilidade de rede do
   # próprio ponto de checagem vira alarme falso.
-  locations_public = ["AWS_US_EAST_1", "AWS_SA_EAST_1"]
+  # Nomes no formato que a API devolve; com o prefixo AWS_ o plan acusava
+  # mudança a cada execução.
+  locations_public = ["US_EAST_1", "SA_EAST_1"]
 
   # Não basta responder 200 — o corpo precisa ser o do healthcheck. Uma página
   # de erro do Gateway com 200 passaria na checagem de status.
